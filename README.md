@@ -9,6 +9,7 @@
 仓库当前保留了上游 PageIndex 的文档建树与检索思路，并在此基础上补充了更贴近业务落地的增强能力，包括：
 
 - 标准 PDF 建树
+- Word 文档自动转 PDF 后建树
 - Markdown 建树
 - PDF 的 Markdown + JSON 混合建树
 - 基于 `workspace` 的索引缓存与复用
@@ -48,7 +49,22 @@
 - `PageIndexClient.index(..., strategy="hybrid")`
 - 合同抽取服务流程
 
-### 2. 引入基于 workspace 的缓存与稳定标识
+### 2. 增加 Word 文档自动转换与建树支持
+
+当前服务层已经支持 `.doc` / `.docx` 文档接入。处理流程为：
+
+- 先识别输入文件后缀
+- 如果是 Word 文档，则先自动转换为 PDF
+- 再基于转换后的 PDF 执行建树和后续抽取
+
+当前转换策略按操作系统区分：
+
+- Windows：通过 `pywin32` 调用本机 Microsoft Word 转 PDF
+- Linux：通过 `libreoffice --headless` 转 PDF
+
+这意味着当前仓库已经从“仅面向 PDF”扩展到“面向 PDF + Word 文档”的服务层输入能力。
+
+### 3. 引入基于 workspace 的缓存与稳定标识
 
 当前仓库增加了文档缓存和稳定身份标识机制：
 
@@ -59,7 +75,7 @@
 
 这样可以避免重复建树，并让后续抽取、调试和白盒流程复用同一份文档索引结果。
 
-### 3. 增加合同字段抽取与 schema 校验
+### 4. 增加合同字段抽取与 schema 校验
 
 在上游“建树/检索”能力之上，当前仓库新增了合同字段抽取能力：
 
@@ -70,7 +86,7 @@
 
 这部分能力适合作为“文档建树之后的结构化抽取层”继续扩展。
 
-### 4. 增加白盒多 Agent 示例与服务封装
+### 5. 增加白盒多 Agent 示例与服务封装
 
 仓库在示例和服务层做了进一步封装：
 
@@ -81,12 +97,13 @@
 
 这使得当前仓库从上游偏研究/演示风格，演进为更适合业务集成和二次开发的项目形态。
 
-### 5. 补充测试覆盖
+### 6. 补充测试覆盖
 
 仓库当前已经围绕以下能力补充测试：
 
 - CLI 入口
 - 客户端缓存与混合建树
+- Word 转 PDF 工具链
 - Markdown 处理
 - 混合建树流程
 - 合同抽取服务
@@ -96,6 +113,7 @@
 ## 功能特性
 
 - 支持 PDF 标准建树
+- 支持 Word 文档自动转 PDF 后建树
 - 支持 Markdown 建树
 - 支持 PDF 混合建树
 - 支持文档结构缓存和复用
@@ -130,6 +148,7 @@
 - Python 3.10 及以上
 - 建议使用虚拟环境
 - 需要可用的大模型 API Key
+- 如需处理 `.doc/.docx`，需要准备对应平台的 Word 转 PDF 运行环境
 
 ### 2. 安装依赖
 
@@ -138,6 +157,12 @@
 ```bash
 pip install -r requirements.txt
 ```
+
+说明：
+
+- Windows 环境会自动安装 `pywin32`
+- `pywin32` 仅解决 COM 调用问题；实际转换 `.doc/.docx` 仍需要本机已安装 Microsoft Word
+- Linux 环境如需处理 `.doc/.docx`，需额外安装 LibreOffice，并确保 `libreoffice --headless` 或 `soffice` 可用
 
 如果需要启动 API 服务，建议额外安装：
 
@@ -183,7 +208,32 @@ artifacts/results/<文档名>_structure.json
 python run_pageindex.py --pdf_path path/to/your/document.pdf
 ```
 
-### 2. Markdown 建树
+### 2. Word 文档建树
+
+当前服务层已经支持 `.doc` / `.docx` 文件。对于这类文件，系统会先自动转换为 PDF，再执行建树。
+
+如果你在 Python 中直接调用服务层，可以传入 Word 文件路径：
+
+```python
+from service import build_document_tree
+
+result = build_document_tree(
+    file_path="path/to/your/document.docx",
+    output_dir="artifacts/output",
+    workspace_dir="artifacts/workspace",
+)
+
+print(result["doc_id"], result["tree_id"], result["source_file"])
+```
+
+说明：
+
+- 返回的 `source_file` 会指向最终用于建树的 PDF 文件
+- Windows 需要安装 Microsoft Word
+- Linux 需要安装 LibreOffice
+- 当前 CLI 仍主要按 `--pdf_path` / `--md_path` 暴露入口，Word 自动转换能力主要体现在服务层与二次集成调用中
+
+### 3. Markdown 建树
 
 适用于原始 Markdown 文档：
 
@@ -197,7 +247,7 @@ python -m pageindex.cli --md_path path/to/your/document.md
 - 更适合原生 Markdown 文档
 - 如果 Markdown 是由 PDF 粗糙转换而来，通常更推荐使用混合建树
 
-### 3. PDF 混合建树
+### 4. PDF 混合建树
 
 适用于需要更稳定层级恢复和页级对齐的 PDF：
 
@@ -216,7 +266,7 @@ python -m pageindex.cli --pdf_path path/to/your/document.pdf --md-hybrid
 python -m pageindex.cli --md_path path/to/your/document.md --json_path path/to/your/document.json --md-hybrid
 ```
 
-### 4. 常用可选参数
+### 5. 常用可选参数
 
 ```bash
 python -m pageindex.cli --help
@@ -231,7 +281,7 @@ python -m pageindex.cli --help
 - `--if-add-node-text`：是否保留节点正文
 - `--if-add-node-id`：是否输出节点 ID
 
-### 5. 合同抽取 Demo
+### 6. 合同抽取 Demo
 
 运行最短路径合同抽取示例：
 
@@ -245,7 +295,7 @@ python examples/contract_extraction_demo.py
 - 使用 `sample_data/schemas/contract_fields_xt_full.json` 作为字段 schema
 - 默认在 `artifacts/contract_workspace/` 下复用或生成索引缓存
 
-### 6. 白盒多 Agent 合同抽取 Demo
+### 7. 白盒多 Agent 合同抽取 Demo
 
 运行带中间过程展示的白盒示例：
 
@@ -259,7 +309,7 @@ python examples/contract_extraction_whitebox_demo.py
 - 默认读取 `pdf/` 目录下的第一个 PDF
 - 默认在 `artifacts/whitebox_contract_workspace/` 下读写缓存
 
-### 7. Python 中使用客户端
+### 8. Python 中使用客户端
 
 最常见的编程式调用方式如下：
 
@@ -294,6 +344,13 @@ uvicorn api:app --reload
 
 这样可以复用共享 `workspace` 中已构建好的文档索引，避免重复上传和重复建树。
 
+需要注意：
+
+- 当前服务层支持 `.pdf/.doc/.docx`
+- 当前 API 上传接口 `POST /api/v1/upload_and_build` 已支持 `.pdf/.doc/.docx`
+- 当通过 API 上传 `.doc/.docx` 时，服务端会在后台先自动转换为 PDF，再继续建树
+- API 返回的建树结果中，`source_file` 指向实际用于索引的文件；对 Word 输入来说，这通常是转换后的 PDF 路径
+
 另外，当前接口统一采用标准响应结构：
 
 ```json
@@ -321,7 +378,7 @@ uvicorn api:app --reload
 
 - `multipart/form-data`
 - 字段名：`file`
-- 仅支持 `.pdf`
+- 支持 `.pdf`、`.doc`、`.docx`
 
 示例命令：
 
@@ -329,6 +386,14 @@ uvicorn api:app --reload
 curl -X POST "http://127.0.0.1:8000/api/v1/upload_and_build" ^
   -H "accept: application/json" ^
   -F "file=@pdf/your_document.pdf;type=application/pdf"
+```
+
+上传 Word 文档示例：
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/upload_and_build" ^
+  -H "accept: application/json" ^
+  -F "file=@docs/your_document.docx;type=application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 ```
 
 返回示例：
@@ -350,6 +415,11 @@ curl -X POST "http://127.0.0.1:8000/api/v1/upload_and_build" ^
 - `source_file`
 - `workspace_dir`
 - `output_dir`
+
+说明：
+
+- 如果上传的是 PDF，`source_file` 通常就是原始 PDF 路径
+- 如果上传的是 `.doc/.docx`，`source_file` 通常会是转换后的 PDF 路径
 
 ### 3. 第二步：基于 `doc_id` 发起动态 schema 抽取
 
@@ -477,7 +547,7 @@ curl "http://127.0.0.1:8000/api/v1/task/b7c2f5c5f1f6496f9858a2dbe4b9b4e0"
 ```json
 {
   "code": 400,
-  "message": "仅支持上传 .pdf 文件",
+  "message": "仅支持上传 .pdf、.doc、.docx 文件",
   "data": null
 }
 ```
@@ -539,6 +609,15 @@ CLI 默认输出一个 `*_structure.json` 文件，常见字段包括：
 
 标准 PDF 建树与混合建树的字段细节可能略有差异，但整体都围绕“层级结构 + 页码范围 + 可选摘要”展开。
 
+如果输入源来自 `.doc/.docx` 服务层调用，则实际建树依赖的是转换后的 PDF，日志中会记录：
+
+- `build_document_tree_started`
+- `word_document_detected`
+- `word_document_converted`
+- `build_document_tree_completed`
+
+如果输入源来自 API 上传的 `.doc/.docx`，整体流程与服务层一致：先落盘原始 Word 文件，再在后台转换为 PDF，最后对转换后的 PDF 建树。
+
 ### 2. 结构化抽取输出
 
 抽取任务会在对应任务输出目录下生成一个 `*_extraction.json` 文件。
@@ -593,6 +672,9 @@ CLI 默认输出一个 `*_structure.json` 文件，常见字段包括：
 
 - API 当前为轻量级内存任务状态管理，适合本地开发和小规模使用
 - 当前服务端限制同时只能存在 1 个活跃任务
+- Word 转 PDF 的支持仅覆盖 Windows 和 Linux
+- Windows 依赖 `pywin32` + 本机 Microsoft Word
+- Linux 依赖 LibreOffice 可执行命令
 - 示例脚本默认依赖仓库内 `pdf/` 目录中的样例文件
 - 混合建树依赖 `opendataloader-pdf`
 - 白盒多 Agent 示例依赖额外的 `openai-agents`

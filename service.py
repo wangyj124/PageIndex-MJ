@@ -7,6 +7,12 @@ from typing import Any, Callable
 
 from pageindex import PageIndexClient, extract_contract_fields, normalize_schema
 from pageindex.logging_utils import JsonLogger
+from pageindex.utils import convert_word_to_pdf
+
+
+PDF_FILE_SUFFIX = ".pdf"
+WORD_FILE_SUFFIXES = {".doc", ".docx"}
+SUPPORTED_DOCUMENT_SUFFIXES = WORD_FILE_SUFFIXES | {PDF_FILE_SUFFIX}
 
 
 def _schema_field_names(schema: dict[str, Any] | list[dict[str, Any]]) -> set[str]:
@@ -200,9 +206,9 @@ def build_document_tree(
 
     返回稳定的 doc_id / tree_id，供后续按动态 schema 二次抽取使用。
     """
-    pdf_path = Path(file_path).expanduser().resolve()
-    if not pdf_path.is_file():
-        raise FileNotFoundError(f"PDF 文件不存在: {pdf_path}")
+    source_path = Path(file_path).expanduser().resolve()
+    if not source_path.is_file():
+        raise FileNotFoundError(f"文件不存在: {source_path}")
 
     workspace_path = Path(workspace_dir).expanduser().resolve()
     workspace_path.mkdir(parents=True, exist_ok=True)
@@ -210,21 +216,76 @@ def build_document_tree(
     output_path_dir = Path(output_dir).expanduser().resolve()
     output_path_dir.mkdir(parents=True, exist_ok=True)
 
-    progress_logger = JsonLogger(str(pdf_path), base_dir=str(output_path_dir / "logs"))
+    source_suffix = source_path.suffix.lower()
+    if source_suffix not in SUPPORTED_DOCUMENT_SUFFIXES:
+        raise ValueError(f"仅支持 .pdf、.doc、.docx 文件，当前文件为: {source_path.name}")
+
+    progress_logger = JsonLogger(str(source_path), base_dir=str(output_path_dir / "logs"))
+    indexed_file_path = source_path
+
+    progress_logger.info(
+        {
+            "event": "build_document_tree_started",
+            "source_file": str(source_path),
+            "strategy": strategy,
+            "workspace_dir": str(workspace_path),
+            "output_dir": str(output_path_dir),
+        }
+    )
+
+    if source_suffix in WORD_FILE_SUFFIXES:
+        progress_logger.info(
+            {
+                "event": "word_document_detected",
+                "source_file": str(source_path),
+                "suffix": source_suffix,
+            }
+        )
+        try:
+            indexed_file_path = Path(convert_word_to_pdf(str(source_path), str(output_path_dir))).resolve()
+        except Exception as exc:
+            progress_logger.exception(
+                {
+                    "event": "word_document_conversion_failed",
+                    "source_file": str(source_path),
+                    "suffix": source_suffix,
+                    "error": str(exc),
+                }
+            )
+            raise
+
+        progress_logger.info(
+            {
+                "event": "word_document_converted",
+                "source_file": str(source_path),
+                "converted_pdf": str(indexed_file_path),
+            }
+        )
+
     client = PageIndexClient(workspace=str(workspace_path))
 
     doc_id = client.index(
-        str(pdf_path),
+        str(indexed_file_path),
         strategy=strategy,
         progress_logger=progress_logger,
     )
     tree_id = client.get_tree_id(doc_id)
 
+    progress_logger.info(
+        {
+            "event": "build_document_tree_completed",
+            "source_file": str(source_path),
+            "indexed_file": str(indexed_file_path),
+            "doc_id": doc_id,
+            "tree_id": tree_id,
+        }
+    )
+
     return {
         "status": "success",
         "doc_id": doc_id,
         "tree_id": tree_id,
-        "source_file": str(pdf_path),
+        "source_file": str(indexed_file_path),
     }
 
 

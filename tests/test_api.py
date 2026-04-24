@@ -72,6 +72,60 @@ def test_upload_and_build_runs_background_task(monkeypatch):
         assert query_body["data"]["status"] == "completed"
 
 
+def test_upload_and_build_accepts_word_and_routes_to_service(monkeypatch):
+    captured = {}
+
+    def fake_build_document_tree(
+        file_path,
+        output_dir,
+        workspace_dir="artifacts/workspace",
+        strategy="hybrid",
+    ):
+        captured["file_path"] = file_path
+        captured["output_dir"] = output_dir
+        captured["workspace_dir"] = workspace_dir
+        captured["strategy"] = strategy
+        return {
+            "status": "success",
+            "doc_id": "doc-build-word",
+            "tree_id": "tree-build-word",
+            "source_file": str(Path(file_path).with_suffix(".pdf")),
+        }
+
+    monkeypatch.setattr(api, "build_document_tree", fake_build_document_tree)
+
+    with TestClient(api.app) as client:
+        response = client.post(
+            "/api/v1/upload_and_build",
+            files={
+                "file": (
+                    "demo.docx",
+                    b"word-binary-demo",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["code"] == 200
+        assert body["message"] == "文件已接收，建树任务已提交到后台。"
+
+        task_id = body["data"]["task_id"]
+        task_info = api.task_store[task_id]
+        task_dir = api.API_TASKS_DIR / task_id
+        saved_word = task_dir / "input" / "demo.docx"
+
+        assert task_info["task_type"] == "build_tree"
+        assert task_info["status"] == "completed"
+        assert task_info["doc_id"] == "doc-build-word"
+        assert task_info["tree_id"] == "tree-build-word"
+        assert saved_word.read_bytes() == b"word-binary-demo"
+        assert captured["file_path"] == str(saved_word)
+        assert captured["workspace_dir"] == str(api.API_SHARED_WORKSPACE)
+        assert captured["output_dir"] == str(task_dir / "output")
+
+
 def test_extract_runs_background_task_with_progress_and_evidence_flag(monkeypatch):
     captured = {}
 
@@ -173,7 +227,7 @@ def test_task_status_returns_progress_for_processing_task():
     }
 
 
-def test_upload_and_build_rejects_non_pdf():
+def test_upload_and_build_rejects_unsupported_file_type():
     with TestClient(api.app) as client:
         response = client.post(
             "/api/v1/upload_and_build",
@@ -184,7 +238,7 @@ def test_upload_and_build_rejects_non_pdf():
     body = response.json()
     assert body == {
         "code": 400,
-        "message": "仅支持上传 .pdf 文件",
+        "message": "仅支持上传 .pdf、.doc、.docx 文件",
         "data": None,
     }
 

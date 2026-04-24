@@ -23,6 +23,7 @@ API_TASKS_DIR = API_WORKSPACE / "tasks"
 API_SHARED_WORKSPACE = API_WORKSPACE / "workspace"
 COPY_CHUNK_SIZE = 1024 * 1024
 MAX_CONCURRENT_TASKS = 1
+SUPPORTED_UPLOAD_SUFFIXES = {".pdf", ".doc", ".docx"}
 
 
 class StandardResponse(BaseModel):
@@ -86,6 +87,7 @@ def _count_schema_fields(schema: dict[str, Any]) -> int:
 def _process_build_tree_task(task_id: str, file_path: str, task_dir: str) -> None:
     """
     后台建树任务。
+
     该任务只负责上传文件后的索引构建，并将结果文档持久化到共享 workspace。
     """
     task_root = Path(task_dir)
@@ -133,6 +135,7 @@ def _process_extraction_task(
 ) -> None:
     """
     后台动态 schema 抽取任务。
+
     该任务复用共享 workspace 中已存在的 doc_id，不再重复上传文件和建树。
     """
     task_root = Path(task_dir)
@@ -203,13 +206,14 @@ async def upload_and_build(
     file: UploadFile = File(...),
 ) -> StandardResponse:
     """
-    接收 PDF 二进制流并异步构建文档树。
+    接收 PDF / Word 二进制流并异步构建文档树。
     """
     check_system_capacity()
 
     filename = Path(file.filename or "").name
-    if not filename or Path(filename).suffix.lower() != ".pdf":
-        raise HTTPException(status_code=400, detail="仅支持上传 .pdf 文件")
+    file_suffix = Path(filename).suffix.lower()
+    if not filename or file_suffix not in SUPPORTED_UPLOAD_SUFFIXES:
+        raise HTTPException(status_code=400, detail="仅支持上传 .pdf、.doc、.docx 文件")
 
     task_id = uuid.uuid4().hex
     task_dir = _build_task_dir(task_id)

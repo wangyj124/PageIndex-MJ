@@ -19,6 +19,12 @@ def test_build_document_tree_returns_doc_and_tree_ids(monkeypatch, tmp_path):
             captured["logger_file_path"] = file_path
             captured["logger_base_dir"] = base_dir
 
+        def info(self, message, *args, **kwargs):
+            captured.setdefault("logger_info", []).append(message)
+
+        def exception(self, message, *args, **kwargs):
+            captured.setdefault("logger_exception", []).append(message)
+
     class DummyClient:
         def __init__(self, workspace):
             captured["workspace"] = workspace
@@ -55,6 +61,80 @@ def test_build_document_tree_returns_doc_and_tree_ids(monkeypatch, tmp_path):
     assert captured["tree_doc_id"] == "doc-demo"
     assert captured["logger_file_path"] == str(pdf_path.resolve())
     assert captured["logger_base_dir"] == str((output_dir.resolve() / "logs"))
+    assert captured["logger_info"][0]["event"] == "build_document_tree_started"
+    assert captured["logger_info"][-1]["event"] == "build_document_tree_completed"
+
+
+def test_build_document_tree_converts_word_before_index(monkeypatch, tmp_path):
+    word_path = tmp_path / "demo_contract.docx"
+    word_path.write_bytes(b"word-content")
+
+    converted_pdf_path = tmp_path / "output" / "demo_contract.pdf"
+    converted_pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    converted_pdf_path.write_bytes(b"%PDF-1.4\nconverted\n")
+
+    output_dir = tmp_path / "output"
+    workspace_dir = tmp_path / "workspace"
+    captured = {}
+
+    class DummyLogger:
+        def __init__(self, file_path, base_dir="artifacts/logs"):
+            captured["logger_file_path"] = file_path
+            captured["logger_base_dir"] = base_dir
+
+        def info(self, message, *args, **kwargs):
+            captured.setdefault("logger_info", []).append(message)
+
+        def exception(self, message, *args, **kwargs):
+            captured.setdefault("logger_exception", []).append(message)
+
+    class DummyClient:
+        def __init__(self, workspace):
+            captured["workspace"] = workspace
+
+        def index(self, file_path, strategy="standard", progress_logger=None):
+            captured["index_file_path"] = file_path
+            captured["index_strategy"] = strategy
+            captured["progress_logger"] = progress_logger
+            return "doc-word-demo"
+
+        def get_tree_id(self, doc_id):
+            captured["tree_doc_id"] = doc_id
+            return "tree-word-demo"
+
+    def fake_convert_word_to_pdf(word_path_arg, output_dir_arg):
+        captured["convert_word_path"] = word_path_arg
+        captured["convert_output_dir"] = output_dir_arg
+        return str(converted_pdf_path.resolve())
+
+    monkeypatch.setattr(service, "JsonLogger", DummyLogger)
+    monkeypatch.setattr(service, "PageIndexClient", DummyClient)
+    monkeypatch.setattr(service, "convert_word_to_pdf", fake_convert_word_to_pdf)
+
+    result = service.build_document_tree(
+        file_path=str(word_path),
+        output_dir=str(output_dir),
+        workspace_dir=str(workspace_dir),
+        strategy="hybrid",
+    )
+
+    assert result == {
+        "status": "success",
+        "doc_id": "doc-word-demo",
+        "tree_id": "tree-word-demo",
+        "source_file": str(converted_pdf_path.resolve()),
+    }
+    assert captured["convert_word_path"] == str(word_path.resolve())
+    assert captured["convert_output_dir"] == str(output_dir.resolve())
+    assert captured["index_file_path"] == str(converted_pdf_path.resolve())
+    assert captured["tree_doc_id"] == "doc-word-demo"
+    assert captured["logger_file_path"] == str(word_path.resolve())
+    assert [item["event"] for item in captured["logger_info"]] == [
+        "build_document_tree_started",
+        "word_document_detected",
+        "word_document_converted",
+        "build_document_tree_completed",
+    ]
 
 
 def test_extract_dynamic_schema_persists_result_and_forwards_progress(monkeypatch, tmp_path):
